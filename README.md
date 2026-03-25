@@ -6,3 +6,5 @@ This project is a comprehensive system designed to manage drug inventory and mon
 
 
 <img width="609" height="498" alt="image" src="https://github.com/user-attachments/assets/b35e222a-c105-40f6-927e-39e4fad8acc5" />
+<img width="786" height="454" alt="image" src="https://github.com/user-attachments/assets/de019902-c1ed-478a-bf7a-b8943d4978c9" />
+<img width="537" height="460" alt="image" src="https://github.com/user-attachments/assets/ee6f07c5-bbd2-48ed-b195-45a4138c68f1" />
