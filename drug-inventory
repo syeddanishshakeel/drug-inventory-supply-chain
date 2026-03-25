@@ -1,57 +1,756 @@
-CREATE DATABASE drug_inventory;
-USE drug_inventory;
+from flask import Flask, render_template, request, redirect, url_for, flash, session
+import mysql.connector
+import os
+from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash
+
+app = Flask(__name__)
+app.secret_key = "supersecretkey"
 
 
-CREATE TABLE customers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(150) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+UPLOAD_FOLDER = 'static/medicine_images'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Create folder if not exists
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+# ---------------- DATABASE CONNECTION FUNCTION ----------------
+def get_db_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="password",   # <-- Put your real MySQL password
+        database="drug_inventory"
+    )
+
+# ---------------- HOME ----------------
+@app.route('/')
+def home():
+    return render_template('home.html')
+
+# ---------------- MANUFACTURER LOGIN ----------------
+@app.route('/manufacturer_login', methods=['GET', 'POST'])
+def manufacturer_login():
+
+    default_username = "admin"
+    default_password = "admin123"
+
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        if username == default_username and password == default_password:
+            session['manufacturer'] = username
+            return redirect(url_for('manufacturer_dashboard'))
+        else:
+            flash("Invalid Manufacturer Credentials")
+
+    return render_template('manufacturer_login.html')
+
+# ---------------- MANUFACTURER DASHBOARD ----------------
+@app.route('/manufacturer_dashboard')
+def manufacturer_dashboard():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    return render_template('manufacturer_dashboard.html')
 
 
-CREATE TABLE suppliers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    supplier_name VARCHAR(100) NOT NULL,
-    email VARCHAR(150) UNIQUE NOT NULL,
-    phone VARCHAR(15) NOT NULL,
-    address TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+@app.route('/add_supplier', methods=['GET', 'POST'])
+def add_supplier():
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    if request.method == 'POST':
+        name = request.form['supplier_name'].strip()
+        email = request.form['email'].strip()
+        phone = request.form['phone'].strip()
+        address = request.form['address'].strip()
+        password = request.form['password'].strip()
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Check if supplier with same name or email already exists
+        cursor.execute("""
+            SELECT * FROM suppliers WHERE supplier_name = %s OR email = %s
+        """, (name, email))
+        existing_supplier = cursor.fetchone()
+
+        if existing_supplier:
+            flash("Supplier with this name or email already exists!", "danger")
+            cursor.close()
+            conn.close()
+            return redirect(url_for('add_supplier'))
+
+        # Hash the password and insert new supplier
+        hashed_password = generate_password_hash(password)
+        cursor.execute("""
+            INSERT INTO suppliers (supplier_name, email, phone, address, password)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (name, email, phone, address, hashed_password))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash("Supplier Added Successfully!", "success")
+        return redirect(url_for('add_supplier'))
+
+    return render_template("add_supplier.html")
+
+# ---------------- SUPPLIER LOGIN ----------------
+@app.route('/supplier_login', methods=['GET', 'POST'])
+def supplier_login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Fetch supplier by email
+        cursor.execute("SELECT * FROM suppliers WHERE email=%s", (email,))
+        supplier = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        # Check password
+        if supplier and check_password_hash(supplier['password'], password):
+            session['supplier'] = supplier['email']
+            flash("Supplier Login Successful!", "success")
+            return redirect(url_for('supplier_dashboard'))
+        else:
+            flash("Invalid Email or Password", "danger")
+
+    return render_template('supplier_login.html')
+# ---------------- CUSTOMER REGISTER ----------------
+@app.route('/customer_register', methods=['GET', 'POST'])
+def customer_register():
+
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        password = request.form['password']
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO customers (name, email, password)
+            VALUES (%s, %s, %s)
+        """, (name, email, password))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash("Registration Successful!")
+        return redirect(url_for('customer_login'))
+
+    return render_template('customer_register.html')
+
+@app.route('/customer_login', methods=['GET', 'POST'])
+def customer_login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT * FROM customers WHERE email=%s AND password=%s",
+                       (email, password))
+        customer = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if customer:
+            session['customer'] = customer['email']
+            return redirect(url_for('customer_dashboard'))  # 🔹 Redirect here
+        else:
+            flash("Invalid Email or Password", "danger")
+
+    return render_template('customer_login.html')
+
+@app.route('/customer_dashboard')
+def customer_dashboard():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    return render_template('customer_dashboard.html')
+# ---------------- REMOVE SUPPLIER ----------------
+@app.route('/remove_supplier', methods=['GET', 'POST'])
+def remove_supplier():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # If delete button clicked
+    if request.method == 'POST':
+        supplier_id = request.form['supplier_id']
+
+        cursor.execute("DELETE FROM suppliers WHERE id = %s", (supplier_id,))
+        conn.commit()
+
+        flash("Supplier Removed Successfully!")
+        cursor.close()
+        conn.close()
+        return redirect(url_for('remove_supplier'))
+
+    # Show suppliers
+    cursor.execute("SELECT * FROM suppliers")
+    suppliers = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template("remove_supplier.html", suppliers=suppliers)
+
+@app.route('/supplier_dashboard')
+def supplier_dashboard():
+    # Check if supplier is logged in
+    if 'supplier' in session:
+        return render_template('supplier_dashboard.html')
+    else:
+        flash("Please log in first.", "warning")
+        return redirect(url_for('supplier_login'))
+
+# ---------------- VIEW SUPPLIERS ----------------
+@app.route('/view_suppliers')
+def view_suppliers():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM suppliers ORDER BY id DESC")
+    suppliers = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template("view_suppliers.html", suppliers=suppliers)
+
+# ---------------- VIEW CUSTOMERS ----------------
+@app.route('/view_customers')
+def view_customers():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM customers ORDER BY id DESC")
+    customers = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template("view_customers.html", customers=customers)
 
 
-CREATE TABLE medicines (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(200) NOT NULL,
-    price DECIMAL(10,2) NOT NULL,
-    disease VARCHAR(200) NOT NULL,
-    stock INT NOT NULL,
-    image VARCHAR(300) NOT NULL,
-    supplier_id INT NOT NULL,
-    
-    FOREIGN KEY (supplier_id)
-        REFERENCES suppliers(id)
-        ON DELETE CASCADE
-);
+# ---------------- REMOVE CUSTOMER ----------------
+@app.route('/remove_customer', methods=['GET', 'POST'])
+def remove_customer():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # If delete button clicked
+    if request.method == 'POST':
+        customer_id = request.form['customer_id']
+
+        cursor.execute("DELETE FROM customers WHERE id = %s", (customer_id,))
+        conn.commit()
+
+        flash("Customer Removed Successfully!")
+        cursor.close()
+        conn.close()
+        return redirect(url_for('remove_customer'))
+
+    # Fetch all customers
+    cursor.execute("SELECT * FROM customers ORDER BY id DESC")
+    customers = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template("remove_customer.html", customers=customers)
+
+@app.route('/add_medicine', methods=['GET', 'POST'])
+def add_medicine():
+    if request.method == 'POST':
+        name = request.form['name']
+        price = request.form['price']
+        disease = request.form['disease']
+        stock = request.form['stock']
+        image = request.files['image']
+
+        if image:
+            filename = secure_filename(image.filename)
+            image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+
+            # 🔹 Create connection here (without touching existing config)
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="password",
+                database="drug_inventory"
+            )
+
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO medicines (name, price, disease, stock, image)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (name, price, disease, stock, filename))
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            flash("Medicine Added Successfully!", "success")
+            return redirect(url_for('add_medicine'))
+
+    return render_template('add_medicine.html')
+
+@app.route('/update_medicine', methods=['GET', 'POST'])
+def update_medicine():
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # STEP 1: Search Medicine by ID
+    if request.method == 'POST' and 'search_id' in request.form:
+        med_id = request.form['search_id']   # ✅ Correct
+
+        cursor.execute("SELECT * FROM medicines WHERE id=%s", (med_id,))
+        medicine = cursor.fetchone()
+
+        if medicine:
+            cursor.close()
+            conn.close()
+            return render_template('update_medicine.html', medicine=medicine)
+        else:
+            flash("Medicine ID Not Found!", "danger")
+
+    # STEP 2: Update Medicine
+    if request.method == 'POST' and 'update_id' in request.form:
+        med_id = request.form['update_id']
+        name = request.form['name']
+        price = request.form['price']
+        disease = request.form['disease']
+        stock = request.form['stock']
+
+        image = request.files['image']
+
+        if image and image.filename != "":
+            filename = secure_filename(image.filename)
+            image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+
+            cursor.execute("""
+                UPDATE medicines 
+                SET name=%s, price=%s, disease=%s, stock=%s, image=%s
+                WHERE id=%s
+            """, (name, price, disease, stock, filename, med_id))
+        else:
+            cursor.execute("""
+                UPDATE medicines 
+                SET name=%s, price=%s, disease=%s, stock=%s
+                WHERE id=%s
+            """, (name, price, disease, stock, med_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash("Medicine Updated Successfully!", "success")
+        return redirect(url_for('update_medicine'))
+
+    cursor.close()
+    conn.close()
+    return render_template('search_medicine.html')
+@app.route('/delete_medicine', methods=['GET', 'POST'])
+def delete_medicine():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    if request.method == 'POST':
+        med_id = request.form['medicine_id']
+
+        # Check if medicine exists
+        cursor.execute("SELECT * FROM medicines WHERE id=%s", (med_id,))
+        medicine = cursor.fetchone()
+
+        if medicine:
+            cursor.execute("DELETE FROM medicines WHERE id=%s", (med_id,))
+            conn.commit()
+            flash("Medicine Deleted Successfully!", "success")
+        else:
+            flash("Medicine ID Not Found!", "danger")
+
+        cursor.close()
+        conn.close()
+        return redirect(url_for('delete_medicine'))
+
+    cursor.close()
+    conn.close()
+    return render_template('delete_medicine.html')
+
+@app.route('/view_medicines')
+def view_medicines():
+
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM medicines ORDER BY id DESC")
+    medicines = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template('view_medicines.html', medicines=medicines)
+
+@app.route('/order_medicine', methods=['GET', 'POST'])
+def order_medicine():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM medicines WHERE stock > 0 ORDER BY name ASC")
+    medicines = cursor.fetchall()
+
+    if request.method == 'POST':
+        med_id = request.form['medicine_id']
+        quantity = request.form['quantity']
+
+        # Store temporarily in session
+        session['payment_medicine_id'] = med_id
+        session['payment_quantity'] = quantity
+
+        return redirect(url_for('payment_page'))   # 🔥 Redirect here
+
+    cursor.close()
+    conn.close()
+
+    return render_template('order_medicine.html', medicines=medicines)
+
+@app.route('/payment_page', methods=['GET', 'POST'])
+def payment_page():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    med_id = session.get('payment_medicine_id')
+    quantity = int(session.get('payment_quantity'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Get medicine details
+    cursor.execute("SELECT * FROM medicines WHERE id=%s", (med_id,))
+    medicine = cursor.fetchone()
+
+    if not medicine:
+        flash("Medicine not found!", "danger")
+        return redirect(url_for('order_medicine'))
+
+    total_price = medicine['price'] * quantity
+
+    if request.method == 'POST':
+
+        # 🔹 Re-check stock before confirming
+        if medicine['stock'] >= quantity:
+
+            # Insert order
+            cursor.execute("""
+                INSERT INTO orders (customer_email, medicine_id, quantity, status)
+                VALUES (%s, %s, %s, %s)
+            """, (session['customer'], med_id, quantity, "Paid"))
+
+            # Reduce stock
+            cursor.execute("""
+                UPDATE medicines
+                SET stock = stock - %s
+                WHERE id = %s
+            """, (quantity, med_id))
+
+            conn.commit()
+
+            cursor.close()
+            conn.close()
+
+            # Clear temporary session values
+            session.pop('payment_medicine_id', None)
+            session.pop('payment_quantity', None)
+
+            # 🔥 Redirect to success animation page
+            return redirect(url_for('payment_success'))
+
+        else:
+            cursor.close()
+            conn.close()
+            flash("Stock not available!", "danger")
+            return redirect(url_for('order_medicine'))
+
+    cursor.close()
+    conn.close()
+
+    return render_template('payment_page.html',
+                           medicine=medicine,
+                           quantity=quantity,
+                           total_price=total_price)
+
+@app.route('/payment_success')
+def payment_success():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    return render_template('payment_success.html')
+
+@app.route('/track_orders')
+def track_orders():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    customer_email = session['customer']
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT 
+            o.id,
+            o.quantity,
+            o.status,
+            s.supplier_name,
+            s.email AS supplier_email,
+            s.phone AS supplier_phone,
+            s.address AS supplier_address,
+            m.name AS medicine_name,
+            m.image
+        FROM orders o
+        LEFT JOIN medicines m ON o.medicine_id = m.id
+        LEFT JOIN suppliers s ON o.supplier_name = s.supplier_name
+        WHERE o.customer_email = %s
+        ORDER BY o.id DESC
+    """, (customer_email,))
+
+    orders = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template("track_orders.html", orders=orders)
 
 
-CREATE TABLE orders (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    customer_id INT NOT NULL,
-    medicine_id INT NOT NULL,
-    quantity INT NOT NULL,
-    status VARCHAR(50) DEFAULT 'Pending',
-    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY (customer_id)
-        REFERENCES customers(id)
-        ON DELETE CASCADE,
 
-    FOREIGN KEY (medicine_id)
-        REFERENCES medicines(id)
-        ON DELETE CASCADE
-);
+# ---------------- VIEW ORDERS ----------------
+@app.route('/view_orders')
+def view_orders():
+    if 'manufacturer' not in session:
+        return redirect(url_for('manufacturer_login'))
 
-ALTER TABLE orders
-MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'Pending';
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Fetch Orders
+    cursor.execute("""
+        SELECT 
+            o.id,
+            o.customer_email,
+            o.quantity,
+            o.status,
+            o.supplier_name,
+            m.name AS medicine_name,
+            m.image
+        FROM orders o
+        JOIN medicines m ON o.medicine_id = m.id
+        ORDER BY o.id DESC
+    """)
+    orders = cursor.fetchall()
+
+    # Fetch Suppliers
+    cursor.execute("SELECT supplier_name FROM suppliers")
+    suppliers = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return render_template(
+        'view_orders.html',
+        orders=orders,
+        suppliers=suppliers
+    )
+# ---------------- ASSIGN ORDER ----------------
+@app.route('/assign_order', methods=['GET', 'POST'])
+def assign_order():
+
+    if request.method == 'POST':
+        order_id = request.form.get('order_id')
+        supplier_name = request.form.get('supplier_name')
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Set status to "Pending" when assigning
+        cursor.execute("""
+            UPDATE orders
+            SET supplier_name=%s, status='Pending'
+            WHERE id=%s
+        """, (supplier_name, order_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash("Supplier Assigned Successfully! Status set to Pending.", "success")
+        return redirect(url_for('view_orders'))
+
+    # If someone opens URL manually
+    return redirect(url_for('view_orders'))
+
+@app.route('/supplier_view_orders')
+def supplier_view_orders():
+    # Ensure supplier is logged in
+    if 'supplier' not in session:
+        flash("Please log in first.", "warning")
+        return redirect(url_for('supplier_login'))
+
+    supplier_email = session['supplier']  # You are storing email in session
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Fetch orders assigned to this supplier
+    cursor.execute("""
+        SELECT 
+            o.id,
+            o.customer_email,
+            o.quantity,
+            o.status,
+            m.name AS medicine_name,
+            m.image
+        FROM orders o
+        JOIN medicines m ON o.medicine_id = m.id
+        WHERE o.supplier_name = (
+            SELECT supplier_name FROM suppliers WHERE email=%s
+        )
+        ORDER BY o.id DESC
+    """, (supplier_email,))
+
+    orders = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return render_template('supplier_view_orders.html', orders=orders)
+# ---------------- DELIVERY STATUS ----------------
+@app.route('/delivery_status')
+def delivery_status():
+    if 'supplier' not in session:
+        flash("Please log in first.", "warning")
+        return redirect(url_for('supplier_login'))
+
+    supplier_email = session['supplier']
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Fetch only Pending and Delivered orders
+    cursor.execute("""
+        SELECT 
+            o.id,
+            o.customer_email,
+            o.quantity,
+            o.status,
+            m.name AS medicine_name,
+            m.image
+        FROM orders o
+        JOIN medicines m ON o.medicine_id = m.id
+        WHERE o.supplier_name = (
+            SELECT supplier_name FROM suppliers WHERE email=%s
+        )
+        AND o.status IN ('Pending','Delivered')
+        ORDER BY o.id DESC
+    """, (supplier_email,))
+
+    orders = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return render_template('delivery_status.html', orders=orders)
+# ---------------- UPDATE ORDER STATUS ----------------
+@app.route('/update_order_status', methods=['GET', 'POST'])
+def update_order_status():
+    if 'customer' not in session:
+        return redirect(url_for('customer_login'))
+
+    customer_email = session['customer']
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    if request.method == 'POST':
+        order_id = request.form.get('order_id')
+        new_status = request.form.get('status')
+
+        if order_id and new_status:
+            # Update only if the order belongs to this customer
+            cursor.execute("""
+                UPDATE orders 
+                SET status=%s 
+                WHERE id=%s AND customer_email=%s
+            """, (new_status, order_id, customer_email))
+            conn.commit()
+            flash(f"Order #{order_id} status updated to '{new_status}'!", "success")
+        else:
+            flash("Invalid request!", "danger")
+
+        return redirect(url_for('update_order_status'))
+
+    # GET request: fetch all orders for this customer
+    cursor.execute("""
+        SELECT o.id, m.name AS medicine_name, o.quantity, o.status
+        FROM orders o
+        JOIN medicines m ON o.medicine_id = m.id
+        WHERE o.customer_email = %s
+        ORDER BY o.id DESC
+    """, (customer_email,))
+
+    orders = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return render_template('update_order_status.html', orders=orders)
+
+# ---------------- LOGOUT ----------------
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('home'))
+
+# ---------------- RUN APP ----------------
+if __name__ == '__main__':
+    app.run(debug=True)
