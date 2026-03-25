@@ -1,0 +1,57 @@
+CREATE DATABASE drug_inventory;
+USE drug_inventory;
+
+
+CREATE TABLE customers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE suppliers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    supplier_name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    phone VARCHAR(15) NOT NULL,
+    address TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE medicines (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    disease VARCHAR(200) NOT NULL,
+    stock INT NOT NULL,
+    image VARCHAR(300) NOT NULL,
+    supplier_id INT NOT NULL,
+    
+    FOREIGN KEY (supplier_id)
+        REFERENCES suppliers(id)
+        ON DELETE CASCADE
+);
+
+
+CREATE TABLE orders (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT NOT NULL,
+    medicine_id INT NOT NULL,
+    quantity INT NOT NULL,
+    status VARCHAR(50) DEFAULT 'Pending',
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (customer_id)
+        REFERENCES customers(id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (medicine_id)
+        REFERENCES medicines(id)
+        ON DELETE CASCADE
+);
+
+ALTER TABLE orders
+MODIFY COLUMN status VARCHAR(50) NOT NULL DEFAULT 'Pending';
